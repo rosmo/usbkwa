@@ -42,6 +42,10 @@
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>  // Install from IDE Library manager
 
+#ifdef ARDUINO_M5Stack_ATOMS3
+#include <M5AtomS3.h>
+#endif
+
 #define DEBUG_ON  0
 #if DEBUG_ON
 #define DBG_begin(...)    Serial.begin(__VA_ARGS__)
@@ -61,6 +65,7 @@ MDNSResponder mdns;
 
 WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
+bool portalTimedOut = false;
 
 #include "index_html.h"
 
@@ -168,22 +173,49 @@ void handleNotFound()
   server.send(404, "text/plain", message);
 }
 
+void configPortalTimeout() {
+  portalTimedOut = true;
+}
+
 void setup()
 {
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
+#ifdef ARDUINO_M5Stack_ATOMS3
+  M5.begin(true, true, true, false);
+  DBG_printf("M5Begin\r\n")
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.clear();
+  // M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextFont(2);
+  M5.Lcd.setTextColor(TFT_GREEN);
+  M5.Lcd.printf("          WiFi\r\n");
+  M5.Lcd.setTextColor(TFT_RED);
+  M5.Lcd.printf("        USB HID\r\n");
+  M5.Lcd.setTextColor(TFT_CYAN);
+  M5.Lcd.printf("       keyboard\r\n");  
+#else
   DBG_begin(115200);
+#endif
+
+#ifdef ARDUINO_M5Stack_ATOMS3
+  M5.Lcd.setTextColor(TFT_WHITE);
+  M5.Lcd.printf("Init USB: ");
+#endif
 
   USB.usbClass(0);
   USB.usbSubClass(0);
   USB.usbProtocol(0);
   Keyboard.begin();
   USB.begin();
-
+#ifdef ARDUINO_M5Stack_ATOMS3
+  M5.Lcd.setTextColor(TFT_GREEN);
+  M5.Lcd.printf("ok\r\n");
+#endif
   //WiFiManager, Local intialization. Once its business is done, there is no need to keep it around
   WiFiManager wm;
 
   //reset settings - wipe credentials for testing
-  //wm.resetSettings();
+  // wm.resetSettings();
 
   // Automatically connect using saved credentials,
   // if connection fails, it starts an access point with the specified name ( "AutoConnectAP"),
@@ -192,14 +224,45 @@ void setup()
 
   bool res;
   // res = wm.autoConnect(); // auto generated AP name from chipid
-  res = wm.autoConnect("usbkeyboard");
-  // res = wm.autoConnect("AutoConnectAP","password"); // password protected ap
+  wm.setConfigPortalBlocking(false);
+  wm.setConfigPortalTimeout(300);
+  wm.setConfigPortalTimeoutCallback(configPortalTimeout);
 
+#ifdef ARDUINO_M5Stack_ATOMS3
+  M5.Lcd.setTextColor(TFT_WHITE);
+  M5.Lcd.printf("Init WiFi: ");
+  int wx = M5.Lcd.getCursorX(), wy = M5.Lcd.getCursorY();
+#endif
+  
+  res = wm.autoConnect("usbkeyboard");
   if(!res) {
-      DBG_println(F("Failed to connect"));
-      delay(1000);
-      ESP.restart();
+#ifdef ARDUINO_M5Stack_ATOMS3
+      M5.Lcd.setTextColor(TFT_YELLOW);
+      M5.Lcd.printf("portal");
+#endif
+      while (true) {
+        bool connected = wm.process();
+        if (connected || (!connected && portalTimedOut)) {
+          break;
+        }
+      }
+      if (portalTimedOut) {
+#ifdef ARDUINO_M5Stack_ATOMS3
+        M5.Lcd.setCursor(wx, wy);
+        M5.Lcd.setTextColor(TFT_RED, TFT_BLACK, true);
+        M5.Lcd.printf("error ");
+#endif
+
+        DBG_println(F("Failed to connect"));
+        delay(5000);
+        ESP.restart();
+      }
   }
+#ifdef ARDUINO_M5Stack_ATOMS3
+  M5.Lcd.setCursor(wx, wy);
+  M5.Lcd.setTextColor(TFT_GREEN, TFT_BLACK, true);
+  M5.Lcd.printf("ok    \r\n");
+#endif
 
   if (mdns.begin("usbkeyboard")) {
     DBG_println(F("MDNS responder started"));
@@ -211,6 +274,12 @@ void setup()
   }
   DBG_print(F("Connect to http://usbkeyboard.local or http://"));
   DBG_println(WiFi.localIP());
+
+#ifdef ARDUINO_M5Stack_ATOMS3
+  M5.Lcd.setTextColor(TFT_WHITE);
+  IPAddress ip = WiFi.localIP();
+  M5.Lcd.printf("\r\nIP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+#endif
 
   server.on("/", handleRoot);
   server.onNotFound(handleNotFound);
